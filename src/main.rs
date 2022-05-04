@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc, env};
 use log::{info, warn, error};
 use rand::Rng;
 use ti_protocol::{
@@ -220,6 +220,12 @@ async fn check_tasks_timeout(
 #[tokio::main]
 async fn main() {
 
+    // 命令行参数
+    let args: Vec<String> = env::args().collect();
+    
+    let default_bind = "0.0.0.0:4321".to_string();
+    let bind = args.get(1).unwrap_or(&default_bind);
+
     log4rs::init_file("log.yml", Default::default()).unwrap();
 
     // 创建一个多线程安全的产品队列
@@ -267,7 +273,7 @@ TM4C123GH6PMI7
     }
 
     // 监听127.0.0.1:8000
-    let listener = TcpListener::bind("0.0.0.0:8000").await.unwrap();
+    let listener = TcpListener::bind(bind).await.unwrap();
     // 循环接收连接
 
     loop {
