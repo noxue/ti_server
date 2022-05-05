@@ -26,7 +26,7 @@ pub async fn get_product_list(
 
 pub async fn get_task_list(
     Extension(tasks): Extension<Arc<Mutex<Vec<TiTask>>>>,
-) -> Result<Json<Vec<TiTask>>, String> {
+) -> Res<Vec<TiTask>> {
     let tasks = tasks.lock().await;
     let mut task_list = Vec::new();
     for task in tasks.iter() {
@@ -36,7 +36,9 @@ pub async fn get_task_list(
             created_at: task.created_at,
         });
     }
-    Ok(Json(task_list))
+    let mut res = Res::default();
+    res.set_data(task_list);
+    res
 }
 
 #[derive(Debug, Serialize, Deserialize)]
