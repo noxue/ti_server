@@ -378,7 +378,7 @@ pub async fn check_tasks_timeout(
 ) {
     tokio::spawn(async move {
         loop {
-            // 睡眠5秒,睡眠放前面，放后面的话tasks.lock()会被阻塞
+            // 睡眠5秒,睡眠放前面，放后面的话tasks.lock()会一直持有
             tokio::time::sleep(Duration::from_millis(2000)).await;
 
             // 检查任务是否超时
@@ -426,5 +426,6 @@ mod tests {
             })
             .await;
         });
+
     }
 }

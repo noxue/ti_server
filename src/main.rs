@@ -3,6 +3,7 @@ use axum::{
     Extension, Router,
 };
 use log::{error, info, warn};
+use tower_http::cors::{CorsLayer, any, Any};
 use std::{collections::VecDeque, env, net::SocketAddr, sync::Arc};
 
 use ti_server::{
@@ -32,42 +33,6 @@ async fn main() {
     let tasks = Arc::new(Mutex::new(Vec::<TiTask>::new()));
 
     check_tasks_timeout(products.clone(), tasks.clone()).await;
-
-    let product_names = r#"
-    1111
-    MSP430F2274IRHAR
-MSP430F2274IRHAT
-eeee
-AM3894CCYG120
-AM3894CCYGA120
-TMS320F2808PZA
-66666666
-AM3354BZCZ80
-AM5716AABCDA
-55555
-MSP430F5659IZCAR
-TM4C1231H6PMI7
-77777
-TM4C1237H6PZI
-66AK2H12DAAW24
-F280045PZS
-999999
-F280045PZSR
-MSP430F6726IPNR
-TMS320F28069UPZPS
-TM4C123GH6PMI7
-    "#;
-
-    // 循环添加产品到队列
-    for name in product_names.lines() {
-        let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        info!("添加产品：{}", name);
-        let product = Product::new(name.to_owned());
-        products.lock().await.push_back(product);
-    }
 
     let products_clone = Arc::clone(&products);
     let tasks_clone = Arc::clone(&tasks);
@@ -110,7 +75,13 @@ TM4C123GH6PMI7
         .route("/tasks", get(get_task_list))
         .route("/products", post(set_product_list))
         .layer(Extension(products.clone()))
-        .layer(Extension(tasks.clone()));
+        .layer(Extension(tasks.clone()))
+        .layer(
+            CorsLayer::new()
+                .allow_headers(Any)
+                .allow_origin(Any)
+                .allow_methods(Any),
+        );
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
