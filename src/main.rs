@@ -1,230 +1,27 @@
-use std::{collections::VecDeque, net::SocketAddr, sync::Arc, env};
-use log::{info, warn, error};
-use rand::Rng;
-use ti_protocol::{
-    get_header_size, PackType, Packet, PacketHeader, Task, TaskResult, TaskResultError, TiPack,
-    TiUnPack,
+use axum::{
+    routing::{get, post},
+    Extension, Router,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-    sync::Mutex,
-    time::Duration,
+use log::{error, info, warn};
+use std::{collections::VecDeque, env, net::SocketAddr, sync::Arc};
+
+use ti_server::{
+    api::{get_product_list, get_task_list, set_product_list},
+    ProductChange, product_change_notify,
 };
-
-async fn handle_connection(
-    mut stream: TcpStream,
-    addr: SocketAddr,
-    products: Arc<Mutex<VecDeque<Product>>>,
-    tasks: Arc<Mutex<Vec<TiTask>>>,
-) {
-    let len: usize = get_header_size();
-    loop {
-        // thread::sleep(Duration::from_millis(10));
-
-        let mut header = vec![0; len];
-        stream.read(&mut header).await.unwrap();
-        let header = PacketHeader::unpack(&header).unwrap();
-
-        // 检查标志位，不对就跳过
-        if !header.check_flag() {
-            continue;
-        }
-
-        // 如果有内容才读取
-        let body = if header.body_size > 0 {
-            let mut v = vec![0; header.body_size as usize];
-            stream.read(&mut v).await.unwrap();
-            v
-        } else {
-            vec![]
-        };
-
-        // 根据数据类型解析数据
-        match header.pack_type {
-            // 表示客户端要获取任务
-            PackType::GetTask => {
-                // 生成一个任务列表中不存在的随机数，作为任务的id
-                let mut tasks = tasks.lock().await;
-                let mut products = products.lock().await;
-                let task_id = loop {
-                    let x: i32 = {
-                        let mut rng = rand::thread_rng();
-                        rng.gen_range(1..99999999)
-                    };
-                    // 判断id是否在任务列表中存在
-                    if !tasks.iter().any(|t| t.task_id == x) {
-                        break x;
-                    }
-                };
-
-                // 根据产品列表生成一个任务，返回给客户端
-                let task = loop {
-                    match products.pop_front() {
-                        Some(mut product) => {
-                            let task = Task::new(task_id, product.name.clone());
-
-                            // 如果rank为负数，就加1，并把product放回到队列中,然后继续获取下一个产品
-                            // 在获取到产品有库存后，会降低rank为负数的产品的rank，
-                            // 减少已经有库存的查询次数，留更多机会给其他产品执行
-                            if product.rank < 0 {
-                                product.rank += 1;
-                                products.push_back(product);
-                                continue;
-                            }
-
-                            // 将任务添加到任务列表中，用于后面返回结果时查询任务信息
-                            tasks.push(TiTask::new(task_id, product.name.clone()));
-                            break task;
-                        }
-                        None => break Task::new(0, "".to_string()),
-                    };
-                };
-
-                info!("发送：{:?}\t到\t{:?}", task, addr);
-
-                // 封包 发送
-                let packet = Packet::new(PackType::Task, task).unwrap();
-                let data = packet.pack().unwrap();
-                stream.write_all(&data).await.unwrap();
-                stream.flush().await.unwrap();
-            }
-            PackType::TaskResult => {
-                let task_result = TaskResult::unpack(&body).unwrap();
-                info!("{:?}", task_result);
-
-                // 根据任务信息生成新的产品，根据执行结果决定添加到 头部 还是 尾部
-                let mut tasks = tasks.lock().await;
-                let mut products = products.lock().await;
-
-                let task = match tasks.iter().find(|t| t.task_id == task_result.task_id) {
-                    Some(t) => t,
-                    // 任务可能超时后才返回结果，所以这里可能没有找到任务
-                    None => {
-                        info!("任务不存在");
-                        continue;
-                    }
-                };
-
-                info!("返回任务：{:?}", task);
-
-                let mut product = Product::new(task.product_name.clone());
-
-                // 从任务列表中删除
-                tasks.retain(|t| t.task_id != task_result.task_id);
-
-                match task_result.result {
-                    // 成功返回结果，就直接把产品添加到产品列表末尾
-                    Ok(product_count) => {
-                        // 如果产品数量大于0，并且产品rank小于等于0的话，就将rank-1，降低执行优先级
-                        // 因为rank大于0，表示用户特别关注，所以不受库存和rank影响
-                        if product_count > 0 && product.rank <= 0 {
-                            product.rank -= 1;
-                        }
-                        products.push_back(product);
-                        info!("获取到的产品个数：{:?}", product_count);
-                    }
-                    // 如果失败，就把产品添加到产品列表前面，方便其他客户端获取
-                    Err(e) => {
-                        if e == TaskResultError::ProductNotFound {
-                            info!("产品不存在");
-                            continue;
-                        }
-                        products.push_front(product);
-                        info!("获取到的产品失败：{:?}", e);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-// 产品结构体
-#[derive(PartialEq, Debug)]
-struct Product {
-    name: String,
-    rank: i32,
-}
-
-impl Product {
-    fn new(name: String) -> Product {
-        Product { name, rank: 0 }
-    }
-
-    fn new_with_rank(name: String, rank: i32) -> Product {
-        Product { name, rank }
-    }
-}
-
-// 自定义服务端任务结构体，方便记录任务执行情况，方便后期扩展，比如记录执行情况，定时执行等
-#[derive(PartialEq, Debug)]
-struct TiTask {
-    task_id: i32,
-    product_name: String,
-    created_at: i64,
-}
-
-impl TiTask {
-    fn new(task_id: i32, product_name: String) -> TiTask {
-        TiTask {
-            task_id,
-            product_name,
-            // 记录创建任务的时间，超过指定时间还没有返回结果，就认为任务失败
-            created_at: chrono::Utc::now().timestamp(),
-        }
-    }
-
-    // 判断任务是否超时
-    fn is_timeout(&self) -> bool {
-        // 获取当前时间
-        let now = chrono::Utc::now().timestamp();
-        info!("时间差: {:?}", now - self.created_at);
-        // 如果当前时间 - 创建任务的时间 > 超时时间，就认为任务超时
-        now - self.created_at > 9
-    }
-}
-
-async fn check_tasks_timeout(
-    products: Arc<Mutex<VecDeque<Product>>>,
-    tasks: Arc<Mutex<Vec<TiTask>>>,
-) {
-    tokio::spawn(async move {
-        loop {
-            // 睡眠5秒,睡眠放前面，放后面的话tasks.lock()会被阻塞
-            tokio::time::sleep(Duration::from_millis(2000)).await;
-
-            // 检查任务是否超时
-            let mut tasks = tasks.lock().await;
-            let mut products = products.lock().await;
-
-            // 循环遍历所有任务
-            for task in tasks.iter() {
-                // 如果任务超时，就把任务从任务列表中移除
-                if task.is_timeout() {
-                    // 根据任务创建产品，并且添加到产品队列的头部
-                    let product = Product::new(task.product_name.clone());
-                    products.push_front(product);
-                }
-            }
-            // 删除超时的任务
-            tasks.retain(|task| !task.is_timeout());
-
-            info!("任务列表：{:?}", tasks);
-            // 产品列表
-            info!("产品列表：{:?}", products);
-        }
-    });
-}
+use ti_server::{check_tasks_timeout, handle_connection, Product, TiTask};
+use tokio::{net::TcpListener, sync::Mutex};
 
 #[tokio::main]
 async fn main() {
-
     // 命令行参数
     let args: Vec<String> = env::args().collect();
-    
+
     let default_bind = "0.0.0.0:4321".to_string();
-    let bind = args.get(1).unwrap_or(&default_bind);
+    let bind = args.get(1).unwrap_or(&default_bind).clone();
+
+    let default_bind = "0.0.0.0:3210".to_string();
+    let api_server = args.get(2).unwrap_or(&default_bind).clone();
 
     log4rs::init_file("log.yml", Default::default()).unwrap();
 
@@ -268,23 +65,59 @@ TM4C123GH6PMI7
             continue;
         }
         info!("添加产品：{}", name);
-        let product = Product::new_with_rank(name.to_owned(), 0);
+        let product = Product::new(name.to_owned());
         products.lock().await.push_back(product);
     }
 
-    // 监听127.0.0.1:8000
-    let listener = TcpListener::bind(bind).await.unwrap();
-    // 循环接收连接
+    let products_clone = Arc::clone(&products);
+    let tasks_clone = Arc::clone(&tasks);
 
-    loop {
-        // 接收请求
-        let (stream, addr) = listener.accept().await.unwrap();
+    // 创建一个管道，用于接收产品个数变更的消息
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ProductChange>(100);
 
-        let products = Arc::clone(&products);
-        let tasks = Arc::clone(&tasks);
+    // 创建一个线程，通知任务
+    tokio::spawn(async move {
+        while let Some(product_change) = rx.recv().await {
+            info!("收到产品变更消息：{:?}", product_change);
+            product_change_notify(product_change).await;
+        }
+    });
 
-        tokio::spawn(async move {
-            handle_connection(stream, addr, products, tasks).await;
-        });
-    }
+    // ti_server 分发任务给 ti_worker
+    tokio::spawn(async move {
+        // 监听127.0.0.1:8000
+        let listener = TcpListener::bind(bind).await.unwrap();
+        // 循环接收连接
+
+        loop {
+            // 接收请求
+            let (stream, addr) = listener.accept().await.unwrap();
+
+            let products = Arc::clone(&products_clone);
+            let tasks = Arc::clone(&tasks_clone);
+            let tx = tx.clone();
+
+            tokio::spawn(async move {
+                handle_connection(stream, addr, products, tasks, tx.clone()).await;
+            });
+        }
+    });
+
+    // 提供web接口
+    // build our application with a route
+    let app = Router::new()
+        .route("/products", get(get_product_list))
+        .route("/tasks", get(get_task_list))
+        .route("/products", post(set_product_list))
+        .layer(Extension(products.clone()))
+        .layer(Extension(tasks.clone()));
+
+    // run our app with hyper
+    // `axum::Server` is a re-export of `hyper::Server`
+    let addr: SocketAddr = api_server.parse().unwrap();
+
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }
