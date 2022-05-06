@@ -116,6 +116,18 @@ impl DingTalkMsg {
     }
 }
 
+fn unicode_to_chinese(s: &str) -> String {
+    let mut result = String::new();
+    for c in s.chars() {
+        if c as u32 > 0x80 {
+            result.push_str(&format!("\\u{:04x}", c as u32));
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 pub async fn product_change_notify(product_change: ProductChange) {
     // 库存没变不用通知
     if product_change.old_count == product_change.count {
@@ -182,7 +194,11 @@ pub async fn product_change_notify(product_change: ProductChange) {
 
     // 如果备注信息不为空，添加备注
     if !product_change.comment.is_empty() {
-        text += format!("\n\n备注：{}", product_change.comment).as_str();
+
+        // unicode转中文
+        let comment = unicode_to_chinese(&product_change.comment);
+
+        text += format!("\n\n备注：{}", comment).as_str();
     }
 
     let mut msg = DingTalkMsg::new(&title, text.as_str());
