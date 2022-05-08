@@ -235,7 +235,8 @@ pub async fn handle_connection(
 ) {
     let len: usize = get_header_size();
     loop {
-        // thread::sleep(Duration::from_millis(10));
+        // 休息50ms, 防止过度占用cpu
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut header = vec![0; len];
         stream.read(&mut header).await.unwrap();
@@ -441,5 +442,13 @@ mod tests {
         let s = "\\u4e0d\\u9650\\u8d2d111";
         let s = crate::ti_server::unicode_to_chinese(s);
         println!("{}", s);
+    }
+
+    #[test]
+    fn test() {
+        loop {
+            //sleep
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
