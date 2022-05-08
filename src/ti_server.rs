@@ -117,15 +117,7 @@ impl DingTalkMsg {
 }
 
 fn unicode_to_chinese(s: &str) -> String {
-    let mut result = String::new();
-    for c in s.chars() {
-        if c as u32 > 0x80 {
-            result.push_str(&format!("\\u{:04x}", c as u32));
-        } else {
-            result.push(c);
-        }
-    }
-    result
+    serde_json::from_str(&format!("\"{}\"", s)).unwrap_or_default()
 }
 
 pub async fn product_change_notify(product_change: ProductChange) {
@@ -194,7 +186,6 @@ pub async fn product_change_notify(product_change: ProductChange) {
 
     // 如果备注信息不为空，添加备注
     if !product_change.comment.is_empty() {
-
         // unicode转中文
         let comment = unicode_to_chinese(&product_change.comment);
 
@@ -442,6 +433,13 @@ mod tests {
             })
             .await;
         });
+    }
 
+    // test unicode_to_chinese
+    #[test]
+    fn test_unicode_to_chinese() {
+        let s = "\\u4e0d\\u9650\\u8d2d111";
+        let s = crate::ti_server::unicode_to_chinese(s);
+        println!("{}", s);
     }
 }
