@@ -17,6 +17,8 @@ pub async fn get_product_list(
             rank: product.rank,
             count: product.count,
             comment: product.comment.clone(),
+            pack_size: product.pack_size,
+            notice_size: product.notice_size,
         });
     }
     let mut res = Res::default();
@@ -44,8 +46,10 @@ pub async fn get_task_list(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetProduct {
     name: String,
-    comment:Option<String>,
+    comment: Option<String>,
     rank: Option<i32>,
+    pack_size: Option<i32>,
+    notice_size: Option<i32>,
 }
 
 pub async fn set_product_list(
@@ -60,11 +64,17 @@ pub async fn set_product_list(
     tasks.clear();
 
     for product in product_list.iter() {
-        products.push_back(Product{
+        products.push_back(Product {
             name: product.name.clone(),
-            comment: product.comment.as_ref().unwrap_or(&"".to_string()).to_string(),
+            comment: product
+                .comment
+                .as_ref()
+                .unwrap_or(&"".to_string())
+                .to_string(),
             rank: product.rank.unwrap_or_default(),
             count: 0,
+            pack_size: product.pack_size.unwrap_or_default(),
+            notice_size: product.notice_size.unwrap_or_default(),
         });
     }
     Json(Res::default())
