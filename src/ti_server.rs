@@ -21,6 +21,8 @@ pub struct Product {
     pub rank: i32,
     pub count: i32,
     pub comment: String,
+    pub pack_size: i32,
+    pub notice_size: i32,
 }
 
 impl Product {
@@ -30,6 +32,8 @@ impl Product {
             rank: 0,
             count: 0,
             comment: String::new(),
+            pack_size: 0,
+            notice_size: 0,
         }
     }
 
@@ -39,6 +43,8 @@ impl Product {
             rank,
             count: 0,
             comment: String::new(),
+            pack_size: 0,
+            notice_size: 0,
         }
     }
 }
@@ -330,6 +336,8 @@ pub async fn handle_connection(
                     rank: task.product.rank,
                     count: task.product.count,
                     comment: task.product.comment.clone(),
+                    pack_size: task.product.pack_size,
+                    notice_size: task.product.notice_size,
                 };
 
                 // 从任务列表中删除
@@ -346,17 +354,25 @@ pub async fn handle_connection(
 
                         // 如果产品数量和之前的不同
                         if product.count != product_count {
-                            if let Err(e) = tx
-                                .send(ProductChange {
-                                    name: product.name.clone(),
-                                    count: product_count,
-                                    old_count: product.count,
-                                    comment: product.comment.clone(),
-                                })
-                                .await
+                            // 如果产品设置了最小通知数量,数量大于最小通知数量，就通知
+                            if !(product.pack_size > 0
+                                && product.notice_size > 0
+                                && product_count - product.count
+                                    < product.notice_size * product.pack_size)
                             {
-                                error!("发送通知消息失败：{:?}", e);
+                                if let Err(e) = tx
+                                    .send(ProductChange {
+                                        name: product.name.clone(),
+                                        count: product_count,
+                                        old_count: product.count,
+                                        comment: product.comment.clone(),
+                                    })
+                                    .await
+                                {
+                                    error!("发送通知消息失败：{:?}", e);
+                                }
                             }
+
                             // 修改产品数量
                             product.count = product_count;
                         }
@@ -403,6 +419,8 @@ pub async fn check_tasks_timeout(
                         rank: task.product.rank,
                         count: task.product.count,
                         comment: task.product.comment.clone(),
+                        pack_size: task.product.pack_size,
+                        notice_size: task.product.notice_size,
                     };
                     products.push_front(product);
                 }
